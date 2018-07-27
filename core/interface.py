@@ -1,5 +1,86 @@
 from easygui import *
-import sys
+import sys, pickle
+
+
+class MainMenu:
+
+    @staticmethod
+    def start_menu():
+        from core.utils import Configuration
+
+        option = GenericInterace.get_load_option()
+        if option is "Default":  # Default Configuration
+            configuration = GenericInterace.reload_configuration("./default.cnf")
+            return configuration
+
+        elif not option:  # Create Configuration
+            configuration = Configuration()
+            selected_dir = GenericInterace.ask_save()
+            if selected_dir:
+                GenericInterace.save_configuration(configuration, selected_dir)
+            return configuration
+
+        else:  # Load from file
+            # option = selected_file
+            configuration = GenericInterace.reload_configuration(option)
+            return configuration
+
+
+class GenericInterace:
+
+    @staticmethod
+    def get_load_option():
+        msg = "Select a configuration for Slave"
+        choices = ["New Configuration", "Default", "Choose", "Cancel"]
+        reply = buttonbox(msg, title="Configuration", choices=choices)
+        if reply is "Cancel":
+            sys.exit(1)
+        if reply is "New Configuration":
+            reply = False
+        if reply is "Choose":
+            reply = fileopenbox(msg="Select saving directory", title="Save Configuration", default="./",
+                                filetypes=["*.cnf", "CNF files"])
+            if not reply:
+                sys.exit(1)
+        return reply
+
+    @staticmethod
+    def get_general_configuration():
+        fieldNames = ["Host Address", "Port"]
+        addr, port = multenterbox("Enter Slave general configuration", "Configuration", fieldNames)
+        return addr, int(port)
+
+    @staticmethod
+    def adding_blocks():
+        choices = ["Add Coils", "Add HoldingRegisters", "Add DiscreteInputs", "Add InputRegisters", "Done"]
+        reply = buttonbox("Select option", title="Configuration", choices=choices)
+        return reply
+
+    @staticmethod
+    def ask_save():
+        msg = "Do you want to save configuration?"
+        title = "Please Confirm"
+        choices = ["Save", "Set as default", "Cancel"]
+        selected = buttonbox(msg, title=title, choices=choices)
+        if selected == "Save":  # show a Continue/Cancel dialog
+            # user chose Save to file
+            selected_dir = filesavebox(msg="Select saving directory", title="Save Configuration", default="./save.slave")
+        elif selected == "Set as default":
+            selected_dir = "./default.cnf"
+        else:
+            selected_dir = None
+        return selected_dir
+
+    @staticmethod
+    def save_configuration(configuration, filename):
+        with open(filename, 'wb') as handle:
+            pickle.dump(configuration, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    @staticmethod
+    def reload_configuration(file_name):
+        with open(file_name, 'rb') as handle:
+            configuration = pickle.load(handle)
+        return configuration
 
 
 class ConfigurationInterface:
@@ -7,7 +88,7 @@ class ConfigurationInterface:
     ConfigItems = ['DiscreteInputs', 'Coils', 'InputRegisters', 'HoldingRegisters']
     Ranges = ['[0-65535]', '0-4095']
 
-    def __init__(self, config_item):
+    def input(self, config_item):
         if config_item not in self.ConfigItems:
             raise ValueError("Config item must be one of next values: " + str(self.ConfigItems))
         if config_item in self.ConfigItems[0:2]:
@@ -15,8 +96,6 @@ class ConfigurationInterface:
         else:
             interval = self.Ranges[1]
         self.msg = "Enter a range for " + config_item + " values. " + interval
-
-    def show(self):
         title = "Slave Configuration"
         field_name = ["Range"]
         field_values = multenterbox(self.msg, title, field_name)
@@ -24,10 +103,9 @@ class ConfigurationInterface:
         if not field_values:  # Cancelled
             sys.exit(0)
 
-        [self.start, self.end] = self.__validate_values(field_values[0])
+        [start, end] = self.__validate_values(field_values[0])
+        return start, end
 
-    def get_input(self):
-        return self.start, self.end
 
     @staticmethod
     def __validate_values(range):
@@ -48,6 +126,8 @@ class ConfigurationInterface:
             # Data Ok
             pass
         return start, end
+
+
 
 
 

@@ -1,5 +1,7 @@
 from scapy.all import *
 import binascii
+from core.exceptions import *
+from bitarray import bitarray
 
 # own constant definitions
 transId = 1
@@ -38,6 +40,36 @@ _modbus_exceptions = {
     8: "Memory parity error",
     10: "Gateway path unavailable",
     11: "Gateway target device failed to respond"}
+
+class Transaction:
+
+    @staticmethod
+    def validate_function_code(supported_functions, requested_function):
+        if requested_function in supported_functions:
+            return True
+        else:
+            return False
+
+    @staticmethod
+    def validate_data_address(data_mask, start_addr, quantity):
+        # Validatione permissions of the request
+        # Exception 02
+        return data_mask.can_access(start_addr, quantity)
+
+    @staticmethod
+    def validate_data_value(quantity):
+        # validate quantity of outputs
+        # Exception 03
+        if quantity < 1 or quantity > 2000:
+            return False
+        else:
+            return True
+
+
+    @staticmethod
+    def execute_function():
+        # Exception 04
+        pass
 
 
 class ModbusADU(Packet):
@@ -138,6 +170,46 @@ class ModbusPDU01ReadCoils(Packet):
         XShortField("quantity", 0x0001)
     ]
 
+    def process(self, datablock, coilsmask, supported_functions):
+        # Read Coils State Diagram:
+        if not Transaction.validate_function_code(supported_functions, 1):
+            raise InvalidFunctionCode01(1)
+
+        if not Transaction.validate_data_value(self.quantity):
+            raise InvalidDataValue03()
+
+        if not Transaction.validate_data_address(coilsmask, self.startAddr, self.quantity):
+            raise InvalidDataAddress02()
+
+        return self.execute(datablock)
+
+    def execute(self, datablock):
+        # response array
+        data = []
+
+        # bits internal array
+        bits = []
+        counter = 1
+
+        # Read all requested bits and storage in internal array 'bits'
+        for i in range(self.startAddr, self.startAddr + self.quantity):
+            bits.append(datablock.read_bit(i))
+
+            if counter is 8:  # When got 8 bits, create an integer and append to response
+                data.append(int(bitarray(bits).to01(), 2))
+                # Restart internal variables
+                bits = []
+                counter = 0
+            counter += 1
+
+        # 0 Padding to 8 multiple
+        while len(bits) % 8 is not 0:
+            bits.append(False)
+
+        # Append padding byte
+        data.append(int(bitarray(bits).to01(), 2))
+        return data
+
 
 class ModbusPDU01ReadCoilsAnswer(Packet):
     name = "Read Coils Answer"
@@ -161,6 +233,24 @@ class ModbusPDU02ReadDiscreteInputs(Packet):
         XByteField("funcCode", 0x02),
         XShortField("startAddr", 0x0000),
         XShortField("quantity", 0x0001)]
+
+    def process(self, datablock, discrete_inputs_mask, supported_functions):
+        # TODO: define
+        # Read DiscreteInputs Diagram:
+        if not Transaction.validate_function_code(supported_functions, 1):
+            raise InvalidFunctionCode01(1)
+
+        if not Transaction.validate_data_value(self.quantity):
+            raise InvalidDataValue03()
+
+        if not Transaction.validate_data_address(discrete_inputs_mask, self.startAddr, self.quantity):
+            raise InvalidDataAddress02()
+
+        return self.execute(datablock)
+
+    def execute(self, datablock):
+        # TODO: define
+        pass
 
 
 class ModbusPDU02ReadDiscreteInputsAnswer(Packet):

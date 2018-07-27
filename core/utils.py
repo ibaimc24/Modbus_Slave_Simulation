@@ -1,54 +1,52 @@
-from core.interface import ConfigurationInterface
+from core.interface import ConfigurationInterface, GenericInterace
 from core.data import *
-
-
-def create_coils_mask():
-    interface = ConfigurationInterface('Coils')
-    interface.show()
-    [start_addr, end_addr] = interface.get_input()
-    return CoilsMask(start_addr, end_addr)
-
-
-def create_input_registers_mask():
-    interface = ConfigurationInterface('InputRegisters')
-    interface.show()
-    [start_addr, end_addr] = interface.get_input()
-    return InputRegistersMask(start_addr, end_addr)
-
-
-def create_holding_registers_mask():
-    interface = ConfigurationInterface('HoldingRegisters')
-    interface.show()
-    [start_addr, end_addr] = interface.get_input()
-    return HoldingRegistersMask(start_addr, end_addr)
-
-
-def create_discrete_inputs_mask():
-    interface = ConfigurationInterface('DiscreteInputs')
-    interface.show()
-    [start_addr, end_addr] = interface.get_input()
-    return DiscreteInputsMask(start_addr, end_addr)
 
 
 class Configuration:
 
     # TODO: User defined
-    SupportedFunctionCodes = [1, 2, 15, 16]
+
+    DefaultFile = "default.cnf"
 
     def __init__(self):
-        # TODO: del
-        print("starting conf")
-        # 1. Create Coils mask
-        self.Coils = create_coils_mask()
-
-        # 2. Create InputRegisters mask
-        self.InputRegisters = create_input_registers_mask()
-
-        # 3. Create HoldingRegisters mask
-        self.HoldingRegisters = create_holding_registers_mask()
-
-        # 4. Create DiscreteInputs mask
-        self.DiscreteInputs = create_discrete_inputs_mask()
-
         # 5. Generate Data Block
         self.Data = DataBlock()
+        self.Coils = CoilsMask()
+        self.InputRegisters = InputRegistersMask()
+        self.HoldingRegisters = DiscreteInputsMask()
+        self.DiscreteInputs = HoldingRegistersMask()
+        self.Address = None
+        self.Port = None
+        self.SupportedFunctionCodes = []
+        self.edit_configuration()
+
+    def edit_configuration(self):
+        self.Address, self.Port = GenericInterace.get_general_configuration()
+        option = GenericInterace.adding_blocks()
+        while option is not "Done":
+            if option == "Add Coils":
+                start, end = ConfigurationInterface().input("Coils")
+                self.SupportedFunctionCodes.append(1)
+                self.SupportedFunctionCodes.append(5)
+                self.Coils.add_block(start, end)
+
+            elif option == "Add InputRegister":
+                start, end = ConfigurationInterface().input("InputRegisters")
+                self.SupportedFunctionCodes.append(4)
+                self.InputRegisters.add_block(start, end)
+
+            elif option == "Add HoldingRegisters":
+                start, end = ConfigurationInterface().input("HoldingRegisters")
+                self.SupportedFunctionCodes.append(3)
+                self.SupportedFunctionCodes.append(6)
+                self.HoldingRegisters.add_block(start, end)
+
+            elif option == "Add DiscreteInputs":
+                start, end = ConfigurationInterface().input("DiscreteInputs")
+                self.SupportedFunctionCodes.append(2)
+                self.DiscreteInputs.add_block(start, end)
+
+            option = GenericInterace.adding_blocks()
+
+
+

@@ -6,17 +6,18 @@ class ModbusException(Exception):
         # Call the base class constructor with the parameters it needs
         super().__init__(message + ". ExceptionCode " + str(exception_code))
         self.exception_code = exception_code
+        self.message = "Modbus Generic Exception"
 
 
-class InvalidFunctionCode(ModbusException):
+class InvalidFunctionCode01(ModbusException):
 
-    def __init__(self):
-        super().__init__("Invalid Function Code", 1)
+    def __init__(self, function_code):
+        super().__init__("Invalid Function Code", function_code)
         self.exception_code = 1
-        self.message = "Invalid Function Code"
+        self.message = "Invalid Function Code %d" % function_code
 
 
-class InvalidDataAddress(ModbusException):
+class InvalidDataAddress02(ModbusException):
 
     def __init__(self):
         super().__init__("Invalid Function Code", 2)
@@ -24,7 +25,7 @@ class InvalidDataAddress(ModbusException):
         self.message = "Invalid Data Code"
 
 
-class InvalidDataValue(ModbusException):
+class InvalidDataValue03(ModbusException):
 
     def __init__(self):
         super().__init__("Invalid Data Value", 3)
