@@ -2,6 +2,7 @@ from scapy.all import *
 import binascii
 from core.exceptions import *
 from bitarray import bitarray
+from threading import Lock
 
 # own constant definitions
 transId = 1
@@ -41,7 +42,11 @@ _modbus_exceptions = {
     10: "Gateway path unavailable",
     11: "Gateway target device failed to respond"}
 
+
 class Transaction:
+
+    RegisterTypes = ['bit', 'register']
+    Locker = Lock()
 
     @staticmethod
     def validate_function_code(supported_functions, requested_function):
@@ -65,11 +70,75 @@ class Transaction:
         else:
             return True
 
+    @staticmethod
+    def read_block(datablock, start_addr, quantity, register_type='bit'):
+        if register_type not in Transaction.RegisterTypes:
+            raise TypeError("Register type must be one of " + str(Transaction.RegisterTypes))
+        # response array
+        data = []
+
+        # bits internal array
+        bits = []
+        counter = 1
+
+        if register_type is 'bit':
+            n_bits = quantity
+            max_counter = 8
+        else:
+            n_bits = quantity * 16
+            max_counter = 16
+        # Read all requested bits and storage in internal array 'bits'
+        # TODO: Change syncronyzed time
+        Transaction.Locker.acquire()
+        for i in range(start_addr, start_addr + n_bits):
+            bits.append(datablock.read_bit(i))
+            if counter is max_counter:  # When got 8 bits, create an integer and append to response
+                data.append(int(bitarray(bits).to01(), 2))
+                # Restart internal variables
+                bits = []
+                counter = 0
+            counter += 1
+        Transaction.Locker.release()
+        if register_type is 'bit':
+            data = Transaction.add_padding(data, bits)
+        return data
 
     @staticmethod
-    def execute_function():
-        # Exception 04
+    def add_padding(data, bits):
+        """
+        Adds to data 'bits' containing values with '0' padding
+        :param data:
+        :param bits:
+        :return:
+        """
+        # 0 Padding to 8 multiple
+        while len(bits) % 8 is not 0:
+            bits.append(False)
+
+        # Append padding byte
+        data.append(int(bitarray(bits).to01(), 2))
+        return data
+
+    @staticmethod
+    def write_register(datablock, start_addr, value):
+        """
+
+        :param datablock: bitarray of data to be overwritten
+        :param start_addr: 16 bit address that represents address to write in datablock
+        :param value: 16 bit integer
+        :return: Nothing
+        """
         pass
+
+    @staticmethod
+    def write_bit(datablock, address, value):
+        if value not in [0, 1]:
+            raise ValueError("Writting values must be 0 or 1 for coils.")
+        Transaction.Locker.acquire()
+        datablock.write_bit(address, value == 1)
+        Transaction.Locker.release()
+
+
 
 
 class ModbusADU(Packet):
@@ -97,57 +166,35 @@ class ModbusADU(Packet):
 
         if function_code == 0x01:
             return ModbusPDU01ReadCoils
-        elif function_code == 0x81:
-            return ModbusPDU01ReadCoilsException
 
         elif function_code == 0x02:
             return ModbusPDU02ReadDiscreteInputs
-        elif function_code == 0x82:
-            return ModbusPDU02ReadDiscreteInputsException
 
         elif function_code == 0x03:
             return ModbusPDU03ReadHoldingRegisters
-        elif function_code == 0x83:
-            return ModbusPDU03ReadHoldingRegistersException
 
         elif function_code == 0x04:
             return ModbusPDU04ReadInputRegisters
-        elif function_code == 0x84:
-            return ModbusPDU04ReadInputRegistersException
 
         elif function_code == 0x05:
             return ModbusPDU05WriteSingleCoil
 
-        elif function_code == 0x85:
-            return ModbusPDU05WriteSingleCoilException
-
         elif function_code == 0x06:
             return ModbusPDU06WriteSingleRegister
-        elif function_code == 0x86:
-            return ModbusPDU06WriteSingleRegisterException
 
         elif function_code == 0x07:
             return ModbusPDU07ReadExceptionStatus
-        elif function_code == 0x87:
-            return ModbusPDU07ReadExceptionStatusException
 
         elif function_code == 0x0F:
             return ModbusPDU0FWriteMultipleCoils
-        elif function_code == 0x8F:
-            return ModbusPDU0FWriteMultipleCoilsException
 
         elif function_code == 0x10:
             return ModbusPDU10WriteMultipleRegisters
-        elif function_code == 0x90:
-            return ModbusPDU10WriteMultipleRegistersException
 
         elif function_code == 0x11:
             return ModbusPDU11ReportSlaveId
-        elif function_code == 0x91:
-            return ModbusPDU11ReportSlaveIdException
         else:
             return Packet.guess_payload_class(self, payload)
-
 
 
 # Can be used to replace all Modbus read
@@ -170,11 +217,8 @@ class ModbusPDU01ReadCoils(Packet):
         XShortField("quantity", 0x0001)
     ]
 
-    def process(self, datablock, coilsmask, supported_functions):
+    def process(self, datablock, coilsmask):
         # Read Coils State Diagram:
-        if not Transaction.validate_function_code(supported_functions, 1):
-            raise InvalidFunctionCode01(1)
-
         if not Transaction.validate_data_value(self.quantity):
             raise InvalidDataValue03()
 
@@ -184,46 +228,8 @@ class ModbusPDU01ReadCoils(Packet):
         return self.execute(datablock)
 
     def execute(self, datablock):
-        # response array
-        data = []
-
-        # bits internal array
-        bits = []
-        counter = 1
-
-        # Read all requested bits and storage in internal array 'bits'
-        for i in range(self.startAddr, self.startAddr + self.quantity):
-            bits.append(datablock.read_bit(i))
-
-            if counter is 8:  # When got 8 bits, create an integer and append to response
-                data.append(int(bitarray(bits).to01(), 2))
-                # Restart internal variables
-                bits = []
-                counter = 0
-            counter += 1
-
-        # 0 Padding to 8 multiple
-        while len(bits) % 8 is not 0:
-            bits.append(False)
-
-        # Append padding byte
-        data.append(int(bitarray(bits).to01(), 2))
-        return data
-
-
-class ModbusPDU01ReadCoilsAnswer(Packet):
-    name = "Read Coils Answer"
-    fields_desc = [
-        XByteField("funcCode", 0x01),
-        BitFieldLenField("byteCount", None, 8, count_of="coilStatus"),
-        FieldListField("coilStatus", [0x00], ByteField("", 0x00), count_from=lambda pkt: pkt.byteCount)]
-
-
-class ModbusPDU01ReadCoilsException(Packet):
-    name = "Read Coils Exception"
-    fields_desc = [
-        XByteField("funcCode", 0x81),
-        ByteEnumField("exceptCode", 1, _modbus_exceptions)]
+        return Transaction.read_block(datablock=datablock, start_addr=self.startAddr,
+                                      quantity=self.quantity, register_type='bit')
 
 
 # 0x02 - Read Discrete Inputs
@@ -234,12 +240,9 @@ class ModbusPDU02ReadDiscreteInputs(Packet):
         XShortField("startAddr", 0x0000),
         XShortField("quantity", 0x0001)]
 
-    def process(self, datablock, discrete_inputs_mask, supported_functions):
+    def process(self, datablock, discrete_inputs_mask):
         # TODO: define
         # Read DiscreteInputs Diagram:
-        if not Transaction.validate_function_code(supported_functions, 1):
-            raise InvalidFunctionCode01(1)
-
         if not Transaction.validate_data_value(self.quantity):
             raise InvalidDataValue03()
 
@@ -249,8 +252,178 @@ class ModbusPDU02ReadDiscreteInputs(Packet):
         return self.execute(datablock)
 
     def execute(self, datablock):
-        # TODO: define
+        return Transaction.read_block(datablock=datablock, start_addr=self.startAddr,
+                                      quantity=self.quantity, register_type='bit')
+
+
+# 0x03 - Read Holding Registers
+# TODO: Test
+class ModbusPDU03ReadHoldingRegisters(Packet):
+    name = "Read Holding Registers"
+    fields_desc = [
+        XByteField("funcCode", 0x03),
+        XShortField("startAddr", 0x0001),
+        XShortField("quantity", 0x0002)]
+
+    def process(self, datablock, holding_registers_mask):
+        if not Transaction.validate_data_value(self.quantity):
+            raise InvalidDataValue03()
+
+        if self.startAddr >= 16 and self.startAddr <= 27:
+            print("Start Address: %s\nQuantity: %s\n")
+        if not Transaction.validate_data_address(holding_registers_mask, self.startAddr, self.quantity):
+            raise InvalidDataAddress02()
+
+        return self.execute(datablock)
+
+    def execute(self, datablock):
+        return Transaction.read_block(datablock=datablock, start_addr=self.startAddr,
+                                      quantity=self.quantity, register_type='register')
+
+
+# 0x04 - Read Input Registers
+# TODO: Test
+class ModbusPDU04ReadInputRegisters(Packet):
+    name = "Read Input Registers"
+    fields_desc = [
+        XByteField("funcCode", 0x04),
+        XShortField("startAddr", 0x0000),
+        XShortField("quantity", 0x0001)]
+
+    def process(self, datablock, input_registers_mask):
+        if not Transaction.validate_data_value(self.quantity):
+            raise InvalidDataValue03()
+
+        if not Transaction.validate_data_address(input_registers_mask, self.startAddr, self.quantity):
+            raise InvalidDataAddress02()
+
+        return self.execute(datablock)
+
+    def execute(self, datablock):
+        return Transaction.read_block(datablock=datablock, start_addr=self.startAddr,
+                                      quantity=self.quantity, register_type='register')
+
+
+# 0x05 - Write Single Coil
+# TODO: Test
+class ModbusPDU05WriteSingleCoil(Packet):
+
+    ValidOutputValues = [0x0000, 0xFF00]
+
+    name = "Write Single Coil"
+    fields_desc = [
+        XByteField("funcCode", 0x05),
+        XShortField("outputAddr", 0x0000),   # from 0x0000 to 0xFFFF
+        XShortField("outputValue", 0x0000)]  # 0x0000 == Off, 0xFF00 == On
+
+    def process(self, datablock, coils_mask):
+        """
+        If proccesing is OK, nothing returns, else, an exception is raised
+        :param datablock:
+        :param coils_mask:
+        :return:
+        """
+        # Validate OutputValue
+        if self.outputValue not in ModbusPDU05WriteSingleCoil.ValidOutputValues:
+            raise InvalidDataValue03()
+
+        if not Transaction.validate_data_address(coils_mask, start_addr=self.outputAddr, quantity=1):
+            raise InvalidDataAddress02()
+
+        self.execute(datablock)
+
+    def execute(self, datablock):
+        try:
+            Transaction.write_bit(datablock, address=self.outputAddr, value=self.outputValue)
+        except Exception as ex:
+            raise SlaveDeviceFailure(str(ex))
+
+
+# 0x06 - Write Single Register
+# TODO: Test
+class ModbusPDU06WriteSingleRegister(Packet):
+    name = "Write Single Register"
+    fields_desc = [
+        XByteField("funcCode", 0x06),
+        XShortField("registerAddr", 0x0000),
+        XShortField("registerValue", 0x0000)]
+
+    def process(self, datablock, holding_registers_mask):
+        # Validate registerValue
+        if self.registerValue > 65535:
+            raise InvalidDataValue03()
+        if not Transaction.validate_data_address(data_mask=holding_registers_mask, start_addr=self.outputAddr,
+                                                 quantity=1):
+            raise InvalidDataAddress02()
+        self.execute(datablock)
+
+    def execute(self, datablock):
+        try:
+            Transaction.write_register(datablock, self.registerAddr, self.registerValue)
+        except Exception as ex:
+            raise SlaveDeviceFailure(str(ex))
+
+
+# 0x0F - Write Multiple Coils
+# TODO: test
+class ModbusPDU0FWriteMultipleCoils(Packet):
+    name = "Write Multiple Coils"
+    fields_desc = [
+        XByteField("funcCode", 0x0F),
+        XShortField("startingAddr", 0x0000),
+        XShortField("quantityOutput", 0x0001),
+        BitFieldLenField("byteCount", None, 8, count_of="outputsValue", adjust=lambda pkt, x:x),
+        FieldListField("outputsValue", [0x00], XByteField("", 0x00), count_from=lambda pkt: pkt.byteCount)]
+
+    def process(self, datablock, coils_mask):
+        if not Transaction.validate_data_value(self.quantityOutput) and (len(self.outputsValue) + 1 != self.byteCount):
+            raise InvalidDataValue03()
+
+        if not Transaction.validate_data_address(data_mask=coils_mask, start_addr=self.startingAddr,
+                                                 quantity=self.quantityOutput):
+            raise InvalidDataAddress02()
+        self.execute(datablock)
+
+    def execute(self, datablock):
+        try:
+            for indx, value in enumerate(self.outputsValue):
+                # Swap output value byte
+                in_little = bitarray(endian='little')
+                in_little.frombytes(value.to_bytes(1, byteorder='little'))
+                for bit in range(8):
+                    Transaction.write_bit(datablock=datablock, address=self.startAddr + indx*8 + bit,
+                                          value=int(in_little[bit]))
+        except Exception as ex:
+            raise SlaveDeviceFailure(str(ex))
+
+
+# 0x10 - Write Multiple Registers
+class ModbusPDU10WriteMultipleRegisters(Packet):
+    name = "Write Multiple Registers"
+    fields_desc = [
+        XByteField("funcCode", 0x10),
+        XShortField("startingAddr", 0x0000),
+        XShortField("quantityRegisters", 0x0001),
+        BitFieldLenField("byteCount", None, 8, count_of="outputsValue", adjust=lambda pkt, x:x),
+        FieldListField("outputsValue", [0x00], XByteField("", 0x00), count_from=lambda pkt: pkt.byteCount)]
+
+    def process(self, datablock, coils_mask):
+        # TODO:
         pass
+
+    def execute(self):
+        # TODO:
+        pass
+
+
+# ---------------- ANSWERS ---------------- #
+
+class ModbusPDU01ReadCoilsAnswer(Packet):
+    name = "Read Coils Answer"
+    fields_desc = [
+        XByteField("funcCode", 0x01),
+        BitFieldLenField("byteCount", None, 8, count_of="coilStatus"),
+        FieldListField("coilStatus", [0x00], ByteField("", 0x00), count_from=lambda pkt: pkt.byteCount)]
 
 
 class ModbusPDU02ReadDiscreteInputsAnswer(Packet):
@@ -261,44 +434,12 @@ class ModbusPDU02ReadDiscreteInputsAnswer(Packet):
         FieldListField("inputStatus", [0x00], ByteField("", 0x00), count_from=lambda pkt: pkt.byteCount)]
 
 
-class ModbusPDU02ReadDiscreteInputsException(Packet):
-    name = "Read Discrete Inputs Exception"
-    fields_desc = [
-        XByteField("funcCode", 0x82),
-        ByteEnumField("exceptCode", 1, _modbus_exceptions)]
-
-
-# 0x03 - Read Holding Registers
-class ModbusPDU03ReadHoldingRegisters(Packet):
-    name = "Read Holding Registers"
-    fields_desc = [
-        XByteField("funcCode", 0x03),
-        XShortField("startAddr", 0x0001),
-        XShortField("quantity", 0x0002)]
-
-
 class ModbusPDU03ReadHoldingRegistersAnswer(Packet):
     name = "Read Holding Registers Answer"
     fields_desc = [
         XByteField("funcCode", 0x03),
         BitFieldLenField("byteCount", None, 8, count_of="registerVal"),
         FieldListField("registerVal", [0x00], ByteField("", 0x00), count_from=lambda pkt: pkt.byteCount)]
-
-
-class ModbusPDU03ReadHoldingRegistersException(Packet):
-    name = "Read Holding Registers Exception"
-    fields_desc = [
-        XByteField("funcCode", 0x83),
-        ByteEnumField("exceptCode", 1, _modbus_exceptions)]
-
-
-# 0x04 - Read Input Registers
-class ModbusPDU04ReadInputRegisters(Packet):
-    name = "Read Input Registers"
-    fields_desc = [
-        XByteField("funcCode", 0x04),
-        XShortField("startAddr", 0x0000),
-        XShortField("quantity", 0x0001)]
 
 
 class ModbusPDU04ReadInputRegistersAnswer(Packet):
@@ -309,44 +450,12 @@ class ModbusPDU04ReadInputRegistersAnswer(Packet):
         FieldListField("registerVal", [0x00], ByteField("", 0x00), count_from=lambda pkt: pkt.byteCount)]
 
 
-class ModbusPDU04ReadInputRegistersException(Packet):
-    name = "Read Input Registers Exception"
-    fields_desc = [
-        XByteField("funcCode", 0x84),
-        ByteEnumField("exceptCode", 1, _modbus_exceptions)]
-
-
-# 0x05 - Write Single Coil
-class ModbusPDU05WriteSingleCoil(Packet):
-    name = "Write Single Coil"
-    fields_desc = [
-        XByteField("funcCode", 0x05),
-        XShortField("outputAddr", 0x0000),   # from 0x0000 to 0xFFFF
-        XShortField("outputValue", 0x0000)]  # 0x0000 == Off, 0xFF00 == On
-
-
 class ModbusPDU05WriteSingleCoilAnswer(Packet):  # The answer is the same as the request if successful
     name = "Write Single Coil"
     fields_desc = [
         XByteField("funcCode", 0x05),
         XShortField("outputAddr", 0x0000),   # from 0x0000 to 0xFFFF
         XShortField("outputValue", 0x0000)]  # 0x0000 == Off, 0xFF00 == On
-
-
-class ModbusPDU05WriteSingleCoilException(Packet):
-    name = "Write Single Coil Exception"
-    fields_desc = [
-        XByteField("funcCode", 0x85),
-        ByteEnumField("exceptCode", 1, _modbus_exceptions)]
-
-
-# 0x06 - Write Single Register
-class ModbusPDU06WriteSingleRegister(Packet):
-    name = "Write Single Register"
-    fields_desc = [
-        XByteField("funcCode", 0x06),
-        XShortField("registerAddr", 0x0000),
-        XShortField("registerValue", 0x0000)]
 
 
 class ModbusPDU06WriteSingleRegisterAnswer(Packet):
@@ -356,13 +465,6 @@ class ModbusPDU06WriteSingleRegisterAnswer(Packet):
         XByteField("funcCode", 0x06),
         XShortField("registerAddr", 0x0000),
         XShortField("registerValue", 0x0000)]
-
-
-class ModbusPDU06WriteSingleRegisterException(Packet):
-    name = "Write Single Register Exception"
-    fields_desc = [
-        XByteField("funcCode", 0x86),
-        ByteEnumField("exceptCode", 1, _modbus_exceptions)]
 
 
 # 0x07 - Read Exception Status (Serial Line Only)
@@ -378,24 +480,6 @@ class ModbusPDU07ReadExceptionStatusAnswer(Packet):
         XByteField("startingAddr", 0x00)]
 
 
-class ModbusPDU07ReadExceptionStatusException(Packet):
-    name = "Read Exception Status Exception"
-    fields_desc = [
-        XByteField("funcCode", 0x87),
-        ByteEnumField("exceptCode", 1, _modbus_exceptions)]
-
-
-# 0x0F - Write Multiple Coils
-class ModbusPDU0FWriteMultipleCoils(Packet):
-    name = "Write Multiple Coils"
-    fields_desc = [
-        XByteField("funcCode", 0x0F),
-        XShortField("startingAddr", 0x0000),
-        XShortField("quantityOutput", 0x0001),
-        BitFieldLenField("byteCount", None, 8, count_of="outputsValue", adjust=lambda pkt, x:x),
-        FieldListField("outputsValue", [0x00], XByteField("", 0x00), count_from=lambda pkt: pkt.byteCount)]
-
-
 class ModbusPDU0FWriteMultipleCoilsAnswer(Packet):
     name = "Write Multiple Coils Answer"
     fields_desc = [
@@ -404,37 +488,12 @@ class ModbusPDU0FWriteMultipleCoilsAnswer(Packet):
         XShortField("quantityOutput", 0x0001)]
 
 
-class ModbusPDU0FWriteMultipleCoilsException(Packet):
-    name = "Write Multiple Coils Exception"
-    fields_desc = [
-        XByteField("funcCode", 0x8F),
-        ByteEnumField("exceptCode", 1, _modbus_exceptions)]
-
-
-# 0x10 - Write Multiple Registers
-class ModbusPDU10WriteMultipleRegisters(Packet):
-    name = "Write Multiple Registers"
-    fields_desc = [
-        XByteField("funcCode", 0x10),
-        XShortField("startingAddr", 0x0000),
-        XShortField("quantityRegisters", 0x0001),
-        BitFieldLenField("byteCount", None, 8, count_of="outputsValue", adjust=lambda pkt, x:x),
-        FieldListField("outputsValue", [0x00], XByteField("", 0x00), count_from=lambda pkt: pkt.byteCount)]
-
-
 class ModbusPDU10WriteMultipleRegistersAnswer(Packet):
     name = "Write Multiple Registers Answer"
     fields_desc = [
         XByteField("funcCode", 0x10),
         XShortField("startingAddr", 0x0000),
         XShortField("quantityRegisters", 0x0001)]
-
-
-class ModbusPDU10WriteMultipleRegistersException(Packet):
-    name = "Write Multiple Registers Exception"
-    fields_desc = [
-        XByteField("funcCode", 0x90),
-        ByteEnumField("exceptCode", 1, _modbus_exceptions)]
 
 
 # 0x11 - Report Slave Id
@@ -453,8 +512,20 @@ class ModbusPDU11ReportSlaveIdAnswer(Packet):
         ConditionalField(XByteField("runIdicatorStatus", 0x00), lambda pkt: pkt.byteCount > 0)]
 
 
-class ModbusPDU11ReportSlaveIdException(Packet):
-    name = "Report Slave Id Exception"
+# ---------------- EXCEPTIONS ---------------- #
+
+
+class ModbusPDUIllegalFunctionException(Packet):
+    name = "Illegal Function Exception"
     fields_desc = [
-        XByteField("funcCode", 0x91),
-        ByteEnumField("exceptCode", 1, _modbus_exceptions)]
+        XByteField("funcCode", 0x80),
+        ByteEnumField("exceptCode", 1, _modbus_exceptions)
+    ]
+
+
+class ModbusPDUGenericException(Packet):
+    name = "Illegal Function Exception"
+    fields_desc = [
+        XByteField("funcCode", 0x80),
+        ByteEnumField("exceptCode", 1, _modbus_exceptions)
+    ]

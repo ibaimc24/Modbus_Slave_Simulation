@@ -33,6 +33,14 @@ class InvalidDataValue03(ModbusException):
         self.message = "Invalid Data Value"
 
 
+class SlaveDeviceFailure(ModbusException):
 
+    def __init__(self, msg=' '):
+        super().__init__("Invalid Data Value", 4)
+        self.exception_code = 4
+        self.message = "Internal Error: %s" % msg
 
+class SlaveException(Exception):
 
+    def __init__(self, message):
+        super().__init__(self, 'SlaveException: %s' % message)

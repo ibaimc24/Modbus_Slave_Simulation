@@ -38,7 +38,7 @@ class GenericInterace:
         if reply is "New Configuration":
             reply = False
         if reply is "Choose":
-            reply = fileopenbox(msg="Select saving directory", title="Save Configuration", default="./",
+            reply = fileopenbox(msg="Select saving directory", title="Save Configuration", default="./conf/",
                                 filetypes=["*.cnf", "CNF files"])
             if not reply:
                 sys.exit(1)
@@ -52,7 +52,7 @@ class GenericInterace:
 
     @staticmethod
     def adding_blocks():
-        choices = ["Add Coils", "Add HoldingRegisters", "Add DiscreteInputs", "Add InputRegisters", "Done"]
+        choices = ["Add Coils", "Add HoldingRegisters", "Add DiscreteInputs", "Add InputRegister", "Done"]
         reply = buttonbox("Select option", title="Configuration", choices=choices)
         return reply
 
@@ -91,10 +91,11 @@ class ConfigurationInterface:
     def input(self, config_item):
         if config_item not in self.ConfigItems:
             raise ValueError("Config item must be one of next values: " + str(self.ConfigItems))
-        if config_item in self.ConfigItems[0:2]:
-            interval = self.Ranges[0]
+
+        if config_item in ['DiscreteInputs', 'Coils']:
+            interval = '[0-65535]'
         else:
-            interval = self.Ranges[1]
+            interval = '[0-4095]'
         self.msg = "Enter a range for " + config_item + " values. " + interval
         title = "Slave Configuration"
         field_name = ["Range"]
@@ -104,6 +105,8 @@ class ConfigurationInterface:
             sys.exit(0)
 
         [start, end] = self.__validate_values(field_values[0])
+        if config_item in ['InputRegisters', 'HoldingRegisters']:
+            end = start + end*16
         return start, end
 
 

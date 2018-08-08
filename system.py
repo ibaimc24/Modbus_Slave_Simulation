@@ -1,7 +1,7 @@
 from threading import Thread, Event
 from core.protocols import *
 from core.exceptions import *
-from bitarray import bitarray
+from core.logging import colors
 
 
 class Slave(Thread):
@@ -13,104 +13,178 @@ class Slave(Thread):
 
     def run(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        """
+                while True:
+            time.sleep(0.5)
+            addr = random.randrange(1, 5, 1)
+            value = self.Configuration.Data.read_bit(addr)
+            print("[*] Read %d : %d " % (addr, value))
+        """
+
+
         print("Slave listening for connections in %s : %d" % (self.Configuration.Address, self.Configuration.Port))
         s.bind((self.Configuration.Address, self.Configuration.Port))
         s.listen(5)
 
-        cnx, addr = s.accept()
-        print("Connection donde by " + str(addr))
-        #while not self.shutdown_flag.is_set():
+        # while not self.shutdown_flag.is_set():
         while True:
-            data = cnx.recv(1024)  # OPTIMIZE: lower buffer = faster
-            if not data:
-                break
+            cnx, addr = s.accept()
+            print("Connection done by " + str(addr))
+            while True:
+                try:
+                    data = cnx.recv(1024)  # OPTIMIZE: lower buffer = faster
+                    if not data:
+                        break
 
-            # TODO: chech for not Modbus Packets
-            pkt = ModbusADU(data)
-            response = self.__get_answer(pkt)
-            if response:
-                cnx.sendto(bytes(response), (addr[0], addr[1]))
-            else:
-                continue
-
-        cnx.close()
+                    # TODO: chech for not Modbus Packets
+                    pkt = ModbusADU(data)
+                    response = self.__get_answer(pkt)
+                    if response:
+                        cnx.sendto(bytes(response), (addr[0], addr[1]))
+                    else:
+                        continue
+                except OSError:
+                    print("Connection closed.")
+                    cnx.close()
 
     def __get_answer(self, modbus_packet):
+        """
+        Gets the requested Modbus answer.
+        :param modbus_packet:
+        :return:
+        """
 
+        modbus_exception = self.__validate_function_code(modbus_packet)
+        if modbus_exception:
+            return modbus_exception
+
+        # READ COILS
         if isinstance(modbus_packet.payload, ModbusPDU01ReadCoils):
             try:
-                coilStatus = modbus_packet.payload.process(
-                    datablock=self.Configuration.Data, coilsmask=self.Configuration.Coils,
-                    supported_functions=self.Configuration.SupportedFunctionCodes)
+                coil_status = modbus_packet.payload.process(
+                    datablock=self.Configuration.Data, coilsmask=self.Configuration.Coils)
 
-                pdu = ModbusPDU01ReadCoilsAnswer(coilStatus=coilStatus, byteCount=len(coilStatus))
+                if modbus_packet.payload.startAddr == 2:
+                    print("[*] Response Address %d , value %s " % (modbus_packet.payload.startAddr, str(coil_status)))
+                pdu = ModbusPDU01ReadCoilsAnswer(coilStatus=coil_status, byteCount=len(coil_status))
                 adu = ModbusADU(len=len(pdu) + 1)
-                return adu / pdu
+
             except ModbusException as ex:
                 # Create ModbusException response packet
                 adu = ModbusADU(len=3)
-                pdu = ModbusPDU01ReadCoilsException(exceptCode=ex.exception_code)
-                return adu / pdu
+                pdu = ModbusPDUGenericException(funcCode=modbus_packet.funcCode + 128, exceptCode=ex.exception_code)
+            return adu / pdu
 
+        # READ DISCRETE INPUTS
         elif isinstance(modbus_packet.payload, ModbusPDU02ReadDiscreteInputs):
             try:
                 input_status = modbus_packet.payload.process(
-                    datablock=self.Configuration.Data, discrete_inputs_mask=self.Configuration.DiscreteInputs,
-                    supported_functions=self.Configuration.SupportedFunctionCodes)
+                    datablock=self.Configuration.Data, discrete_inputs_mask=self.Configuration.DiscreteInputs)
 
-                pdu = ModbusPDU02ReadDiscreteInputsAnswer(coilStatus=input_status, byteCount=len(input_status))
+                pdu = ModbusPDU02ReadDiscreteInputsAnswer(inputStatus=input_status, byteCount=len(input_status))
                 adu = ModbusADU(len=len(pdu) + 1)
-                return adu / pdu
             except ModbusException as ex:
                 # Create ModbusException response packet
                 adu = ModbusADU(len=3)
-                pdu = ModbusPDU02ReadDiscreteInputsException(exceptCode=ex.exception_code)
-                return adu / pdu
+                pdu = ModbusPDUGenericException(funcCode=modbus_packet.funcCode + 128, exceptCode=ex.exception_code)
 
+            return adu / pdu
+
+        # READ HOLDING REGISTERS
+        elif isinstance(modbus_packet.payload, ModbusPDU03ReadHoldingRegisters):
+            try:
+                registers_status = modbus_packet.payload.process(
+                    datablock=self.Configuration.Data,
+                    holding_registers_mask=self.Configuration.HoldingRegisters)
+                pdu = ModbusPDU03ReadHoldingRegistersAnswer(registerVal=registers_status, byteCount=len(registers_status))
+                adu = ModbusADU(len=len(pdu) + 1)
+            except ModbusException as ex:
+                # Create ModbusException response packet
+                adu = ModbusADU(len=3)
+                pdu = ModbusPDUGenericException(funcCode=modbus_packet.funcCode + 128, exceptCode=ex.exception_code)
+
+            return adu / pdu
+
+        # READ INPUT REGISTERS
+        elif isinstance(modbus_packet.payload, ModbusPDU04ReadInputRegisters):
+            try:
+                registers_status = modbus_packet.payload.process(
+                    datablock=self.Configuration.Data,
+                    input_registers_mask=self.Configuration.InputRegisters)
+                pdu = ModbusPDU04ReadInputRegistersAnswer(registerVal=registers_status, byteCount=len(registers_status))
+                adu = ModbusADU(len=len(pdu) + 1)
+            except ModbusException as ex:
+                # Create ModbusException response packet
+                adu = ModbusADU(len=3)
+                pdu = ModbusPDUGenericException(funcCode=modbus_packet.funcCode + 128, exceptCode=ex.exception_code)
+
+            return adu / pdu
+
+        # WRITE SINGLE COIL
+        elif isinstance(modbus_packet.payload, ModbusPDU05WriteSingleCoil):
+            try:
+                modbus_packet.payload.process(datablock=self.Configuration.Data, coils_mask=self.Configuration.Coils)
+                # If goes OK, return an echo of request packet
+                return modbus_packet
+
+            except ModbusException as ex:
+                # Create ModbusException response packet
+                adu = ModbusADU(len=3)
+                pdu = ModbusPDUGenericException(funcCode=modbus_packet.funcCode + 128, exceptCode=ex.exception_code)
+
+            return adu / pdu
+
+        elif isinstance(modbus_packet.payload, ModbusPDU06WriteSingleRegister):
+            try:
+                modbus_packet.payload.process(datablock=self.Configuration.Data,
+                                              holding_registers_mask=self.Configuration.HoldingRegisters)
+                # If goes OK, return an echo of request packet
+                return modbus_packet
+            except ModbusException as ex:
+                adu = ModbusADU(len=3)
+                pdu = ModbusPDUGenericException(funcCode=modbus_packet.funcCode + 128, exceptCode=ex.exception_code)
+
+            return adu/pdu
+
+        elif isinstance(modbus_packet.payload, ModbusPDU0FWriteMultipleCoils):
+            try:
+                modbus_packet.payload.process(datablock=self.Configuration.Data, coils_mask=self.Configuration.Coils)
+                pdu = ModbusPDU0FWriteMultipleCoilsAnswer(startingAddr=modbus_packet.payload.startingAddr,
+                                                          quantityOutput=modbus_packet.payload.quantityOutput)
+                adu = ModbusADU(len=len(pdu)+1)
+
+            except SlaveDeviceFailure as ex:
+                print("[*]" + colors.bold + colors.fg.red + " System Failure while writting multiple coils: "
+                      + ex.message)
+                print("[*]" + colors.bold + colors.fg.red + " A ModbusException has sent with Exception code 04."
+                      + colors.reset)
+                adu = ModbusADU(len=3)
+                pdu = ModbusPDUGenericException(funcCode=modbus_packet.funcCode + 128, exceptCode=ex.exception_code)
+            except ModbusException as ex:
+                adu = ModbusADU(len=3)
+                pdu = ModbusPDUGenericException(funcCode=modbus_packet.funcCode + 128, exceptCode=ex.exception_code)
+
+            return adu / pdu
 
         # TODO: All type of answers
         else:
-            # Unknown Function Code
+            print("Unknown Function Code received.")
             adu = ModbusADU(len=3)
-
+            code = modbus_packet.funcCode
             # TODO: Exception with requested function code + 127
-            pdu = ModbusPDU01ReadCoilsException(funcCode=129, exceptCode=1)
+            pdu = ModbusPDUGenericException(funcCode=code + 128, exceptCode=1)
             return adu / pdu
 
-    def __validate_function_code(self, function_code):
+    def __validate_function_code(self, modbus_packet):
+        """
+        Cheks if slave supports requested function code.
+        :param modbus_packet: Recived packet
+        :return:    If it does, None is returned.
+                    If it's not supported, the corresponding ModbusException Packet is returned.
+        """
+        data = binascii.hexlify(bytes(modbus_packet.payload))
+        function_code = int(data[0:2], 16)
         if function_code not in self.Configuration.SupportedFunctionCodes:
-            raise InvalidFunctionCode01()
-        # print(colors.WARNING + "Modbus Read Coils pakcet proccessing." + colors.reset)
-
-    def __validate_data_address(self, start_addr):
-        # TODO: validate or raise ExceptionCode = 2
-
-        pass
-
-    def __validate_data_value(self, start_addr, quantity):
-        # print(colors.WARNING + "Checking for access permissions" + colors.reset)
-        if not self.Configuration.Coils.can_access(start_addr, quantity):
-            raise InvalidDataAddress02()
-
-    def __execute_modbus_function(self, function_code, start_addr, quantity):
-        # TODO: validate or raise ExceptionCode = 4, 5 or 6
-        try:
-            bits = []
-            ans = []
-            counter = 1
-            for i in range(start_addr, start_addr+quantity):
-                bits.append(self.Configuration.Data.read_bit(i))
-                if counter is 8:
-                    ans.append(int(bitarray(bits).to01(), 2))
-                    bits = []
-                    counter = 0
-                counter += 1
-
-            return ans
-        except Exception as ex:
-            raise ModbusException
-
-    def __validate_outputs_quantity(self, quantity):
-        # print(colors.WARNING + "Validating number of requested outputs" + colors.reset)
-        if quantity < 1 or quantity > 2000:
-            raise InvalidDataValue03()
+            adu = ModbusADU(len=3)
+            pdu = ModbusPDUIllegalFunctionException(funcCode=function_code+127)
+            return adu / pdu

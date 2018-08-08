@@ -1,26 +1,35 @@
 from bitarray import bitarray
 from abc import ABCMeta
 import abc
-
+from core.exceptions import SlaveException
+from array import array
 
 class DataBlock:
 
-    # TODO: Catch arguments exceptions
-
     blockName = "Data"
 
-    def __init__(self):
-        self.data = bitarray(2**16)
-        self.data.setall(0)
+    BlockTypes = ['bit', 'register']
+
+    def __init__(self, type='bit'):
+        if type not in DataBlock.BlockTypes:
+            raise SlaveException("Invalid DataBlock type")
+        if type == 'bit':
+            self.type = 'bit'
+            self.data = self.data = bitarray(2**16)
+            self.data.setall(0)
+        else:
+            self.type = 'register'
+            self.data = array('h', [0]*100)
+
         self.Blocks = []
+
+    def add_block(self, start_addr, end):
+        self.Blocks.append((start_addr, end))
 
     def show(self):
         print("\n\n------ " + self.blockName + " ------\n")
         for i in range(0, 65535, 16):
             print(self.data[i:i+16].to01())
-
-    def change_register(self, start_addr, n_registers, valuess):
-        pass
 
     def show_blocks(self):
         print("\t%s " % self.blockName)
@@ -34,7 +43,9 @@ class DataBlock:
         :return: 16 bit integer representing the register value.
         """
         bit_num = addr * 16
-        return self.data[bit_num:bit_num+16]
+        # Access In mutual exclusion
+        value = self.data[bit_num:bit_num+16]
+        return value
 
     def write_register(self, addr, value):
         """
@@ -65,7 +76,8 @@ class DataBlock:
         :param addr:
         :return: True if '1'. False if '0'.
         """
-        return self.data[addr]
+        value = self.data[addr]
+        return value
 
     def write_bit(self, addr, value):
         """
@@ -76,6 +88,12 @@ class DataBlock:
         """
         self.data[addr] = value
 
+class BitTable(DataBlock):
+
+    def __init__(self):
+        DataBlock.__init__(self)
+        self.data = self.data = bitarray(2 ** 16)
+        self.data.setall(0)
 
 class MaskInterface(object):
     __metaclass__ = ABCMeta
@@ -88,13 +106,16 @@ class MaskInterface(object):
     def add_block(self, start_addr, end_addr):
         pass
 
+    def show_blocks(self):
+        pass
+
 
 class GenerikMask(MaskInterface):
 
     MaskName = "Generic Mask"
 
     def __init__(self):
-        MaskInterface.__init__()
+        MaskInterface.__init__(self)
         self.mask = bitarray(2 ** 16)
         self.mask.setall(0)
         self.Blocks = []
@@ -108,67 +129,47 @@ class GenerikMask(MaskInterface):
         self.mask[start_addr:end_addr] = True
         self.Blocks.append((start_addr, end_addr))
 
+    def show_blocks(self):
+        print("\t%s " % self.MaskName)
+        for block in self.Blocks:
+            print("\t\t\tFrom \t %d \t to \t %d" % (block[0], block[1]))
 
 
-class CoilsMask(DataBlock):
+class CoilsMask(GenerikMask):
 
-    blockName = "Coils Mask"
+    MaskName = "Coils Mask"
 
     def __init__(self):
-        DataBlock.__init__(self)
-        self.Blocks = []
+        GenerikMask.__init__(self)
 
-    def add_block(self, start_addr, end_addr):
-        self.data[start_addr:end_addr] = True
-        self.Blocks.append((start_addr, end_addr))
+
+class InputRegistersMask(GenerikMask):
+
+    MaskName = "Input Register"
+
+    def __init__(self):
+        GenerikMask.__init__(self)
 
     def can_access(self, start_addr, quantity):
-        requested = self.data[start_addr : start_addr+quantity]
-        # Returns True when all bits in the array are True.
+        requested = self.mask[start_addr: start_addr + quantity*16]
         return requested.all()
 
 
-class InputRegistersMask(DataBlock):
+class HoldingRegistersMask(GenerikMask):
 
-    blockName = "Input Register"
-
-    def __init__(self):
-        DataBlock.__init__(self)
-        self.Blocks = []
-
-    def add_block(self, start_addr, end_addr):
-        self.data[start_addr*16:end_addr*16] = True
-        self.Blocks.append((start_addr, end_addr))
-
-
-class HoldingRegistersMask(DataBlock):
-
-    blockName = "Holding Registers"
+    MaskName = "Holding Registers"
 
     def __init__(self):
-        DataBlock.__init__(self)
-        self.Blocks = []
-
-    def add_block(self, start_addr, end_addr):
-        self.data[start_addr*16:end_addr*16] = True
-        self.Blocks.append((start_addr, end_addr))
+        GenerikMask.__init__(self)
 
     def can_access(self, start_addr, quantity):
-        requested = self.data[start_addr : start_addr+quantity]
-        # Returns True when all bits in the array are True.
+        requested = self.mask[start_addr: start_addr + quantity*16]
         return requested.all()
 
 
-class DiscreteInputsMask(DataBlock):
+class DiscreteInputsMask(GenerikMask):
 
-    blockName = "Discrete Inputs"
+    MaskName = "Discrete Inputs"
 
     def __init__(self):
-        DataBlock.__init__(self)
-        self.Blocks = []
-
-    def add_block(self, start_addr, end_addr):
-        self.data[start_addr:end_addr] = True
-        self.Blocks.append((start_addr, end_addr))
-
-
+        GenerikMask.__init__(self)
